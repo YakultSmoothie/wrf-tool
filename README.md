@@ -9,5 +9,5 @@
 | `calc_wrf_stats_inplace.py [-i files] [-o output] ...` | Calculate statistics from multiple wrfouts and save values into a new file copied from first file | [GitHub](https://github.com/YakultSmoothie/wrf-tool/blob/main/calc_wrf_stats_inplace.py) |
 | `ana_vorticity_budget_CTL_mean.py [-L level] [-T time] [-n output_dir] [-d domain]` | Calculate and visualize relative vorticity budget terms from w2nc output. Outputs include diagnostic plots and NetCDF files with smoothed/unsmoothed budget terms. | [GitHub](https://github.com/YakultSmoothie/wrf-tool/tree/main/ana_vorticity_budget_CTL_mean) |
 | `wrf_modify_sst.py [-i input] [-o out_path] ...` | Modify Sea Surface Temperature (SST) in WPS met_em* files. | [GitHub](https://github.com/YakultSmoothie/wrf-tool/blob/main/wrf_modify_sst.py) |
-| `plot_domain.py -i inputs [-o output] [-c cints]` | Plot WRF domains from `geo_em.nc` files. | [GitHub](https://github.com/YakultSmoothie/wrf-tool/blob/main/plot_domain.py) |
+| `plot_domain.py -i inputs [-o output] [-c cints]` | Plot WRF domains from `geo_em.nc` files. | [GitHub](https://github.com/YakultSmoothie/PY_No_MoNo/blob/main/plot_domain.py) |
 
