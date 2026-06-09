@@ -9,6 +9,7 @@
 # 更新日期: 2025-06-14 - 新增網格插值功能 + WRF全域屬性提取功能(全屬性版本) + 系集/時間平均功能
 # 更新日期: 2025-06-15 - 優化提取迴圈in wrfdata_sel
 # 更新日期: 2025-06-22 - 增加平均之後保留的屬性
+# 更新日期: 2026-06-22 - [v1.5] - 擴充支援: 可讀取不是在member資料夾下的wrfout
 #
 # Description:
 #   此程式可以從WRF系集輸出中提取指定domain、系集成員、時間點、氣壓層的資料，
@@ -23,7 +24,8 @@
 # ============================================================================================
 
 import os
-import sys
+import sys    
+import glob
 import argparse
 import netCDF4
 import xarray as xr
@@ -41,25 +43,25 @@ def parse_arguments():
         epilog="""
 使用範例:
   # 分解多變數為單獨變數
-  python extract_wrf_multi_vars.py -i /path/to/wrf -o extract_wrf_vars_p -V z,uvmet -L 850 -T "2006-06-09_00:00:00" -E 1 --decompose_multi 
+  python extract_wrf_to_nc.py -i /path/to/wrf -o extract_wrf_vars_p -V z,uvmet -L 850 -T "2006-06-09_00:00:00" -E 1 --decompose_multi 
 
   # 提取單層(地面層)資料
-  python extract_wrf_multi_vars.py -i /path/to/wrf -o extract_wrf_vars_s -V slp,Q2,uvmet10 -L surface [or sfc or -9999] -T "2006-06-09_00:00:00" -E 1 --decompose_multi
+  python extract_wrf_to_nc.py -i /path/to/wrf -o extract_wrf_vars_s -V slp,Q2,uvmet10 -L surface [or sfc or -9999] -T "2006-06-09_00:00:00" -E 1 --decompose_multi
 
   # 網格插值使用範例
-  python extract_wrf_multi_vars.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00" -E 1 -LL 110,130,15,30,0.1 -o interpolated_grid --decompose_multi
+  python extract_wrf_to_nc.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00" -E 1 -LL 110,130,15,30,0.1 -o interpolated_grid --decompose_multi
 
   # 系集平均
-  python extract_wrf_multi_vars.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00" -E 1,2,3,4,5 --Emean -o ensemble_mean
+  python extract_wrf_to_nc.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00" -E 1,2,3,4,5 --Emean -o ensemble_mean
 
   # 時間平均  
-  python extract_wrf_multi_vars.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00,2006-06-09_03:00:00,2006-06-09_06:00:00" -E 1 --Tmean -o time_mean
+  python extract_wrf_to_nc.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00,2006-06-09_03:00:00,2006-06-09_06:00:00" -E 1 --Tmean -o time_mean
 
   # 系集和時間雙重平均 + 網格插值
-  python extract_wrf_multi_vars.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00,2006-06-09_03:00:00" -E 1,2,3 --Emean --Tmean -LL 119,123,22,26,0.2 -o ensemble_time_mean_interp
+  python extract_wrf_to_nc.py -i /path/to/wrf -V z,QVAPOR -L 850 -T "2006-06-09_00:00:00,2006-06-09_03:00:00" -E 1,2,3 --Emean --Tmean -LL 119,123,22,26,0.2 -o ensemble_time_mean_interp
 
 作者: CYC
-Update: 2025-06-22 [v1.4 - Added grid interpolation functionality + comprehensive WRF global attributes extraction + Ensemble/Time averaging + wrfdata_sel_optimized]
+Update: 2026-06-22 [v1.5]
         """)
 
     # 必要參數
@@ -102,6 +104,22 @@ Update: 2025-06-22 [v1.4 - Added grid interpolation functionality + comprehensiv
 
     return parser.parse_args()
 
+def get_wrf_search_dir(base_dir, domain, ensemble_members):
+    first_member = ensemble_members[0]
+    member_dir = f"member{first_member:03d}"
+    member_path = os.path.join(base_dir, member_dir)
+
+    member_pattern = os.path.join(member_path, f"wrfout_{domain}_*")
+    if os.path.isdir(member_path) and glob.glob(member_pattern):
+        return member_path, member_dir
+
+    single_pattern = os.path.join(base_dir, f"wrfout_{domain}_*")
+    if len(ensemble_members) == 1 and glob.glob(single_pattern):
+        return base_dir, "single_member"
+
+    raise FileNotFoundError(
+        f"No WRF files found. Checked {member_pattern} and {single_pattern}"
+    )
 
 def ensure_output_directory(output_dir):
     """確保輸出目錄存在"""
@@ -117,33 +135,51 @@ def ensure_output_directory(output_dir):
 def detect_available_times(wrf_dir, domain, ensemble_members):
     """自動偵測可用的時間點"""
     print("Auto-detecting available time points...")
-    
-    # 使用第一個系集成員來偵測時間點
-    first_member = ensemble_members[0]
-    member_dir = f"member{first_member:03d}"
-    member_path = os.path.join(wrf_dir, member_dir)
-    
-    if not os.path.exists(member_path):
-        raise FileNotFoundError(f"Member directory not found: {member_path}")
-    
-    # 尋找該domain的檔案
-    import glob
-    pattern = os.path.join(member_path, f"wrfout_{domain}_*")
+
+    search_dir, source_label = get_wrf_search_dir(wrf_dir, domain, ensemble_members)
+
+    pattern = os.path.join(search_dir, f"wrfout_{domain}_*")
     files = glob.glob(pattern)
-    
+
     if not files:
-        raise FileNotFoundError(f"No WRF files found for domain {domain} in {member_path}")
-    
-    # 提取時間字串
+        raise FileNotFoundError(f"No WRF files found for domain {domain} in {search_dir}")
+
     time_points = []
     for file_path in sorted(files):
         filename = os.path.basename(file_path)
-        # 提取時間部分: wrfout_d02_2006-06-09_00:00:00
-        time_part = filename.split(f'wrfout_{domain}_')[1]
+        time_part = filename.split(f"wrfout_{domain}_")[1]
         time_points.append(time_part)
-    
+
+    print(f"    Source: {source_label}")
     print(f"    Found {len(time_points)} time points")
     print(f"    Time range: {time_points[0]} to {time_points[-1]}")
+    
+    # # 使用第一個系集成員來偵測時間點
+    # first_member = ensemble_members[0]
+    # member_dir = f"member{first_member:03d}"
+    # member_path = os.path.join(wrf_dir, member_dir)
+    
+    # if not os.path.exists(member_path):
+    #     raise FileNotFoundError(f"Member directory not found: {member_path}")
+    
+    # # 尋找該domain的檔案
+    # import glob
+    # pattern = os.path.join(member_path, f"wrfout_{domain}_*")
+    # files = glob.glob(pattern)
+    
+    # if not files:
+    #     raise FileNotFoundError(f"No WRF files found for domain {domain} in {member_path}")
+    
+    # # 提取時間字串
+    # time_points = []
+    # for file_path in sorted(files):
+    #     filename = os.path.basename(file_path)
+    #     # 提取時間部分: wrfout_d02_2006-06-09_00:00:00
+    #     time_part = filename.split(f'wrfout_{domain}_')[1]
+    #     time_points.append(time_part)
+    
+    # print(f"    Found {len(time_points)} time points")
+    # print(f"    Time range: {time_points[0]} to {time_points[-1]}")
     
     return time_points
 
@@ -419,13 +455,19 @@ def extract_wrf_global_attributes(base_dir, domain, ensemble_members, time_point
     
     try:
         # 嘗試從第一個系集成員的第一個時間點讀取屬性
-        first_member = ensemble_members[0]
+        # first_member = ensemble_members[0]
         first_time = time_points[0]
         
-        member_dir = f"member{first_member:03d}"
+        # member_dir = f"member{first_member:03d}"
+        # filename = f"wrfout_{domain}_{first_time}"
+        # sample_file_path = os.path.join(base_dir, member_dir, filename)
+
+        search_dir, source_label = get_wrf_search_dir(base_dir, domain, ensemble_members)
+
         filename = f"wrfout_{domain}_{first_time}"
-        sample_file_path = os.path.join(base_dir, member_dir, filename)
-        
+        sample_file_path = os.path.join(search_dir, filename)
+
+        print(f"        Source: {source_label}")
         print(f"        Reading global attributes from: {sample_file_path}")
         
         if not os.path.exists(sample_file_path):
@@ -434,7 +476,8 @@ def extract_wrf_global_attributes(base_dir, domain, ensemble_members, time_point
             
             # 嘗試尋找任何可用的WRF檔案
             import glob
-            pattern = os.path.join(base_dir, f"member{first_member:03d}", f"wrfout_{domain}_*")
+            # pattern = os.path.join(base_dir, f"member{first_member:03d}", f"wrfout_{domain}_*")
+            pattern = os.path.join(search_dir, f"wrfout_{domain}_*")
             available_files = glob.glob(pattern)
             
             if available_files:
@@ -723,7 +766,7 @@ def save_to_netcdf(data, output_path, compression_level=0,
         # -----------------
         wrf_global_attrs = {}
         if (wrf_base_dir and wrf_domain and wrf_ensemble_members and wrf_time_points):
-            print(f"    Extracting WRF global attributes from original files...")
+            # print(f"    Extracting WRF global attributes from original files...")
             wrf_global_attrs = extract_wrf_global_attributes(
                 wrf_base_dir, wrf_domain, wrf_ensemble_members, wrf_time_points
             )
@@ -1758,7 +1801,22 @@ def wrfdata_sel_optimized(I, D, L, T, E, V_list, decompose_multi=False):
             # 構建檔案路徑
             member_dir = f"member{e:03d}"
             filename = f"wrfout_{D}_{time_str}"
-            file_path = os.path.join(I, member_dir, filename)
+
+            # file_path = os.path.join(I, member_dir, filename)
+
+            # 擴充支援: 可讀取不是在member資料夾下的wrfout
+            member_file_path = os.path.join(I, member_dir, filename)
+            single_file_path = os.path.join(I, filename)
+
+            if os.path.exists(member_file_path):
+                file_path = member_file_path
+                read_label = os.path.join(member_dir, filename)
+            elif len(E) == 1 and os.path.exists(single_file_path):
+                file_path = single_file_path
+                read_label = filename
+            else:
+                file_path = member_file_path
+                read_label = os.path.join(member_dir, filename)
 
             # 檢查檔案是否存在
             if not os.path.exists(file_path):
@@ -1766,7 +1824,7 @@ def wrfdata_sel_optimized(I, D, L, T, E, V_list, decompose_multi=False):
                 member_success = False
                 break
 
-            print(f"        Reading: {member_dir}/{filename}")
+            print(f"        Reading: {read_label}")
             
             try:
                 # *** 關鍵優化：每個時間檔案只打開一次 ***

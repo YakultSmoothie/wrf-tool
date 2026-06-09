@@ -83,7 +83,7 @@ A, V, D: CYC, v1.1, 2025-03-25
 
     parser.add_argument('-info', '--information', action='store_true',
                        help='顯示詳細資訊')
-
+    
     return parser.parse_args()
 
 #------------------------------------
@@ -100,21 +100,21 @@ def manual_read_files(file_paths, variables=None):
     """
     datasets = []
     first_ds = None
-
+    
     for i, file_path in enumerate(file_paths):
         print(f"  讀取檔案 {i+1}/{len(file_paths)}: {file_path}")
         ds = xr.open_dataset(file_path)
-
+        
         # 確保只處理第一個時間點
         if 'Time' in ds.sizes and ds.sizes['Time'] > 1:
             print(f"  注意: 檔案 {file_path} 有多個時間點 ({ds.sizes['Time']})，只使用第一個時間點")
             ds = ds.isel(Time=0)
-
+        
         # 保存第一個檔案的完整Dataset
         if i == 0:
             first_ds = ds.copy(deep=True)
             print(f"  已保存第一個檔案作為模板")
-
+        
         # 如果指定了變數子集，僅保留這些變數
         if variables:
             # 檢查請求的變數是否都存在
@@ -122,14 +122,14 @@ def manual_read_files(file_paths, variables=None):
             if i == 0:
                 print(f"  僅處理以下變數: {available_vars}")
             ds = ds[available_vars]
-
+        
         # 添加檔案維度
         ds = ds.expand_dims(dim={"file": [i]})
         datasets.append(ds)
 
     # 合併所有數據集
     combined_ds = xr.concat(datasets, dim="file")
-
+    
     return combined_ds, first_ds
 
 #------------------------------------
@@ -149,14 +149,14 @@ def get_statistics(dataset, func_name):
         if var.dtype.kind in 'SU':  # 字符串類型變數
             if var_name in ['Times', 'XTIME'] or 'time' in var_name.lower():
                 time_vars.append(var_name)
-
+    
     # 從計算中排除時間變數
     if time_vars:
         print(f"  從統計計算中排除時間變數: {time_vars}")
         calc_ds = dataset.drop_vars(time_vars)
     else:
         calc_ds = dataset
-
+    
     # 計算統計量
     if func_name == 'mean':
         result = calc_ds.mean(dim='file')
@@ -178,7 +178,7 @@ def get_statistics(dataset, func_name):
         result = calc_ds.quantile(0.75, dim='file')
     else:
         raise ValueError(f"不支援的統計量函數: {func_name}")
-
+    
     return result
 
 #------------------------------------
@@ -193,16 +193,16 @@ def replace_variables(template_ds, stats_ds):
         更新後的Dataset
     """
     result_ds = template_ds.copy(deep=True)
-
+    
     # 獲取可能要替換的變數列表
     replace_vars = [var for var in stats_ds.data_vars if var in template_ds.data_vars]
     print(f"  將替換以下 {len(replace_vars)} 個變數: {replace_vars[:5]}...")
     if len(replace_vars) > 5:
         print(f"  ...以及 {len(replace_vars)-5} 個更多變數")
-
+    
     # 收集需要特殊處理的整數變數
     integer_vars = []
-
+    
     # 逐個替換變數
     for var_name in replace_vars:
         try:
@@ -211,7 +211,7 @@ def replace_variables(template_ds, stats_ds):
                 print(f"  警告: 變數 {var_name} 的形狀不匹配，無法替換")
                 print(f"    模板形狀: {template_ds[var_name].shape}, 統計結果形狀: {stats_ds[var_name].shape}")
                 continue
-
+            
             # 檢查原始變數是否為整數類型
             original_dtype = template_ds[var_name].dtype
             if np.issubdtype(original_dtype, np.integer):
@@ -225,10 +225,10 @@ def replace_variables(template_ds, stats_ds):
                 print(f"  已替換變數: {var_name}")
         except Exception as e:
             print(f"  替換變數 {var_name} 時出錯: {str(e)}")
-
+    
     if integer_vars:
         print(f"\n共處理 {len(integer_vars)} 個整數類型變數")
-
+    
     return result_ds
 
 #------------------------------------
@@ -242,20 +242,20 @@ def prepare_encoding(template_ds):
         包含編碼設定的字典
     """
     encoding = {}
-
+    
     # 遍歷所有變數
     for var_name, var in template_ds.variables.items():
         # 初始化此變數的編碼設定
         var_encoding = {}
-
+        
         # 從原始變數的編碼中獲取關鍵設定
         original_encoding = var.encoding
-
+        
         # 複製關鍵設定
         for key in ['_FillValue', 'dtype', 'scale_factor', 'add_offset', 'zlib', 'complevel']:
             if key in original_encoding:
                 var_encoding[key] = original_encoding[key]
-
+        
         # 確保整數類型變數有適當的_FillValue
         if np.issubdtype(var.dtype, np.integer) and '_FillValue' not in var_encoding:
             # 如果是整數類型但沒有_FillValue，添加一個適當的預設值
@@ -275,16 +275,16 @@ def prepare_encoding(template_ds):
                 var_encoding['_FillValue'] = np.uint32(4294967295)
             elif var.dtype == np.uint64:
                 var_encoding['_FillValue'] = np.uint64(18446744073709551615)
-
+        
         # 如果原始數據已壓縮，保持壓縮
         if 'zlib' not in var_encoding:
             var_encoding['zlib'] = True
             var_encoding['complevel'] = 4
-
+        
         # 保存此變數的編碼設定
         if var_encoding:
             encoding[var_name] = var_encoding
-
+    
     return encoding
 
 #------------------------------------
@@ -315,7 +315,7 @@ def main():
     # 讀取所有輸入檔案
     try:
         print(f"正在讀取輸入檔案...")
-
+        
         # 保存第一個檔案的完整Dataset
         template_ds = None
 
@@ -327,28 +327,28 @@ def main():
             try:
                 # 嘗試使用dask
                 print("嘗試使用dask讀取檔案...")
-
+                
                 # 先讀取第一個檔案作為模板
                 template_ds = xr.open_dataset(args.input[0])
                 print(f"  template file: {args.input[0]}")
-
+                
                 # 確保模板只保留第一個時間點
                 if 'Time' in template_ds.sizes and template_ds.sizes['Time'] > 1:
                     print(f"  注意: 模板檔案有多個時間點 ({template_ds.sizes['Time']})，只使用第一個時間點")
                     template_ds = template_ds.isel(Time=0)
-
+                
                 # 讀取所有檔案
                 if args.chunks:
                     ds = xr.open_mfdataset(args.input, concat_dim='file', combine='nested',
                                          chunks={'file': 1, 'Time': args.chunks})
                 else:
                     ds = xr.open_mfdataset(args.input, concat_dim='file', combine='nested')
-
+                
                 # 確保只處理第一個時間點
                 if 'Time' in ds.sizes and ds.sizes['Time'] > 1:
                     print(f"  注意: 檔案有多個時間點 ({ds.sizes['Time']})，只使用第一個時間點")
                     ds = ds.isel(Time=0)
-
+                
             except (ImportError, ValueError) as e:
                 # 如果dask不可用，回退到手動方法
                 print(f"警告: 無法使用dask({str(e)})，改用手動方法讀取檔案...")
@@ -367,7 +367,7 @@ def main():
 
         print(f"\n數據維度: {ds.sizes}")
         print(f"模板維度: {template_ds.sizes}")
-
+        
         if args.information:
             # 顯示讀取的資料基本資訊
             print(f"可用變數: {list(ds.data_vars)}")
@@ -400,7 +400,7 @@ def main():
                         var_max = float(np.nanmax(var_np)) if np.any(~np.isnan(var_np)) else "N/A"
                         var_mean = float(np.nanmean(var_np)) if np.any(~np.isnan(var_np)) else "N/A"
                         var_shape = str(var_data.shape)
-
+                        
                         # 顯示被替換的變數訊息
                         print(f"  {i:3d}. {var_name:<15} | 已替換 | 形狀: {var_shape:<15} | 範圍: {var_min:.4g} to {var_max:.4g} | 平均: {var_mean:.4g}")
                     else:
